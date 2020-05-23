@@ -1,0 +1,400 @@
+C51 COMPILER V9.54   TEST                                                                  03/20/2018 17:55:10 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE TEST
+OBJECT MODULE PLACED IN .\Objects\test.obj
+COMPILER INVOKED BY: F:\keil\C51\BIN\C51.EXE test.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\test.ls
+                    -t) OBJECT(.\Objects\test.obj)
+
+line level    source
+
+   1          // FileName                     :       dataCollector.c
+   2          // Data                         :       2018/03/09
+   3          // Description          :       使用单片机制作数据采集器，包括温度、湿度、光照度、CO2的环境数据
+   4          // Author                       :       song
+   5          
+   6          #include "intrins.h"
+   7          #include "stc8.h"
+   8          
+   9          #define BMP280_ADDR                     0xec
+  10          #define BMP280_TEMP_ADDR        0xfa
+  11          #define BMP280_PRESS_ADDR       0xf7
+  12          
+  13          unsigned short dig_T1;
+  14          short dig_T2;
+  15          short dig_T3;
+  16          unsigned short dig_P1;
+  17          short dig_P2;
+  18          short dig_P3;
+  19          short dig_P4;
+  20          short dig_P5;
+  21          short dig_P6;
+  22          short dig_P7;
+  23          short dig_P8;
+  24          short dig_P9;
+  25          
+  26          
+  27          /********** 定义串口参数 ***************/
+  28          //时钟晶振
+  29          #define FOSC    11059200UL
+  30          //定义波特率9600
+  31          #define BRT             (256 - FOSC / 9600 / 32)
+  32          //UART1忙标志位
+  33          bit Uart1_BusyFlag;
+  34          //Uart1输入输出数组
+  35          char bufferPtr;
+  36          char Uart1Buffer[16];
+  37          
+  38          
+  39          void delay_ms(int x)
+  40          {
+  41   1              unsigned char i, j;
+  42   1      
+  43   1              while(x-- > 0)
+  44   1              {
+  45   2                      i = 15;
+  46   2                      j = 90;
+  47   2                      do
+  48   2                      {
+  49   3                              while (--j);
+  50   3                      } while (--i);
+  51   2              }
+  52   1      }
+  53          
+  54          void Uart1Int() interrupt 4 using 1
+C51 COMPILER V9.54   TEST                                                                  03/20/2018 17:55:10 PAGE 2   
+
+  55          {
+  56   1      
+  57   1              if(TI)
+  58   1              {
+  59   2                      TI = 0;
+  60   2                      Uart1_BusyFlag = 0;
+  61   2              }
+  62   1              if(RI)
+  63   1              {
+  64   2                      RI = 0;
+  65   2                      Uart1Buffer[bufferPtr++] = SBUF;
+  66   2              }
+  67   1      }
+  68          
+  69          void Uart1Init()
+  70          {
+  71   1              //固定波特率9位数据方式
+  72   1              SCON = 0x50;
+  73   1              //定时器1  8位自动重载模式
+  74   1              TMOD = 0x20;
+  75   1              
+  76   1              TL1 = BRT;
+  77   1              TH1 = BRT;
+  78   1              AUXR = 0x40;
+  79   1              TR1 = 1;
+  80   1              
+  81   1              bufferPtr = 0;
+  82   1              Uart1_BusyFlag = 0;
+  83   1      }
+  84          
+  85          void Uart1SendByte(char dat)
+  86          {
+  87   1              while(Uart1_BusyFlag);
+  88   1              Uart1_BusyFlag = 1;
+  89   1              SBUF = dat;
+  90   1      }
+  91          
+  92          void Uart1SendStr(char *p)
+  93          {
+  94   1              while(*p)
+  95   1              {
+  96   2                      Uart1SendByte(*p++);
+  97   2              }
+  98   1      }
+  99          
+ 100          
+ 101          
+ 102          //I2C相关参数
+ 103          void I2C_Wait()
+ 104          {
+ 105   1              while(!(I2CMSST & 0x40));
+ 106   1                      //Uart1SendStr("i2c wait...\r\n");
+ 107   1              I2CMSST &= ~0x40;
+ 108   1      }
+ 109          
+ 110          void I2C_Start()
+ 111          {
+ 112   1              I2CMSCR = 0x01;
+ 113   1              I2C_Wait();
+ 114   1      }
+ 115          
+ 116          void I2C_SendData(char dat)
+C51 COMPILER V9.54   TEST                                                                  03/20/2018 17:55:10 PAGE 3   
+
+ 117          {
+ 118   1              I2CTXD = dat;
+ 119   1              I2CMSCR = 0x02;
+ 120   1              I2C_Wait();
+ 121   1      }
+ 122          
+ 123          void I2C_RecvACK()
+ 124          {
+ 125   1              I2CMSCR = 0x03;
+ 126   1              I2C_Wait();
+ 127   1      }
+ 128          
+ 129          char I2C_RecvData()
+ 130          {
+ 131   1              I2CMSCR = 0x04;
+ 132   1              I2C_Wait();
+ 133   1              return(I2CRXD);
+ 134   1      }
+ 135          
+ 136          void I2C_SendACK()
+ 137          {
+ 138   1              I2CMSST = 0x00;
+ 139   1              I2CMSCR = 0x05;
+ 140   1              I2C_Wait();
+ 141   1      }
+ 142          
+ 143          void I2C_SendNAK()
+ 144          {
+ 145   1              I2CMSST = 0x01;
+ 146   1              I2CMSCR = 0x05;
+ 147   1              I2C_Wait();
+ 148   1      }
+ 149          
+ 150          void I2C_Stop()
+ 151          {
+ 152   1              I2CMSCR = 0x06;
+ 153   1              I2C_Wait();
+ 154   1      }
+ 155          
+ 156          void I2C_Init()
+ 157          {
+ 158   1              P_SW2 = 0x80;
+ 159   1              I2CCFG = 0xe0;
+ 160   1              I2CMSST = 0x00;
+ 161   1      }
+ 162          
+ 163          void printHex(unsigned char i)
+ 164          {
+ 165   1              unsigned char j;
+ 166   1              
+ 167   1              for(j = 0;j < 8;j++)
+ 168   1              {
+ 169   2                      if(j == 4)
+ 170   2                      {
+ 171   3                              Uart1SendByte(' ');
+ 172   3                      }
+ 173   2                      
+ 174   2                      if(i & 0x80)
+ 175   2                      {
+ 176   3                              Uart1SendByte('1');
+ 177   3                      }
+ 178   2                      else
+C51 COMPILER V9.54   TEST                                                                  03/20/2018 17:55:10 PAGE 4   
+
+ 179   2                      {
+ 180   3                              Uart1SendByte('0');
+ 181   3                      }
+ 182   2                      i <<= 1;
+ 183   2              }
+ 184   1              
+ 185   1              Uart1SendByte(' ');
+ 186   1      }
+ 187          
+ 188          unsigned char bmp280_ReadByte(unsigned char addr)
+ 189          {
+ 190   1              unsigned char temp;
+ 191   1              
+ 192   1              I2C_Start();
+ 193   1              I2C_SendData(BMP280_ADDR);
+ 194   1              I2C_RecvACK();
+ 195   1              I2C_SendData(addr);
+ 196   1              I2C_RecvACK();
+ 197   1              
+ 198   1              I2C_Start();
+ 199   1              I2C_SendData(BMP280_ADDR + 1);
+ 200   1              I2C_RecvACK();
+ 201   1              temp = I2C_RecvData();
+ 202   1              I2C_SendNAK();
+ 203   1              I2C_Stop();
+ 204   1              
+ 205   1              return temp;
+ 206   1      }
+ 207          
+ 208          void bmp280_WriteByte(unsigned char addr, unsigned char dat)
+ 209          {
+ 210   1              I2C_Start();
+ 211   1              I2C_SendData(BMP280_ADDR);
+ 212   1              I2C_RecvACK();
+ 213   1              I2C_SendData(addr);
+ 214   1              I2C_RecvACK();
+ 215   1              I2C_SendData(dat);
+ 216   1              I2C_RecvACK();
+ 217   1              I2C_Stop();
+ 218   1      }
+ 219          
+ 220          long bmp280_MultipleReadThree(unsigned char addr)
+ 221          {
+ 222   1              unsigned char msb, lsb, xlsb;
+ 223   1              long temp = 0;
+ 224   1              msb = bmp280_ReadByte(addr);
+ 225   1              lsb = bmp280_ReadByte(addr + 1);
+ 226   1              xlsb = bmp280_ReadByte(addr + 2);
+ 227   1              
+ 228   1              temp = (long)(((unsigned long)msb << 12)|((unsigned long)lsb << 4)|((unsigned long)xlsb >> 4));
+ 229   1              
+ 230   1              return temp;
+ 231   1      }
+ 232          
+ 233          short bmp280_MultipleReadTwo(unsigned char addr)
+ 234          {
+ 235   1              unsigned char msb, lsb;
+ 236   1              short temp = 0;
+ 237   1              lsb = bmp280_ReadByte(addr);
+ 238   1              msb = bmp280_ReadByte(addr + 1);
+ 239   1              
+ 240   1              temp = (short)msb << 8;
+C51 COMPILER V9.54   TEST                                                                  03/20/2018 17:55:10 PAGE 5   
+
+ 241   1              temp |= (short)lsb;
+ 242   1              
+ 243   1              return temp;
+ 244   1      }
+ 245          
+ 246          void bmp280_Init(void)
+ 247          {
+ 248   1              unsigned char temp = 0;
+ 249   1              
+ 250   1              //所有寄存器全部清零
+ 251   1              bmp280_WriteByte(0xe0, 0xb6);
+ 252   1      
+ 253   1              //读取设备ID
+ 254   1      //      temp = bmp280_ReadByte(0xd0);
+ 255   1      //      if(temp == 0x58)
+ 256   1      //              Uart1SendStr("bmp280 id is right...\r\n");
+ 257   1      //      else
+ 258   1      //              Uart1SendStr("bmp280 id is error...\r\n");
+ 259   1              
+ 260   1              //温度、大气压、全速测量状态全开
+ 261   1              bmp280_WriteByte(0xf4, 0xff);
+ 262   1              //间隔时间0.5ms
+ 263   1              bmp280_WriteByte(0xf5, 0x00);
+ 264   1      
+ 265   1              dig_T1 = bmp280_MultipleReadTwo(0x88);
+ 266   1              dig_T2 = bmp280_MultipleReadTwo(0x8A);
+ 267   1              dig_T3 = bmp280_MultipleReadTwo(0x8C);
+ 268   1              dig_P1 = bmp280_MultipleReadTwo(0x8E);
+ 269   1              dig_P2 = bmp280_MultipleReadTwo(0x90);
+ 270   1              dig_P3 = bmp280_MultipleReadTwo(0x92);
+ 271   1              dig_P4 = bmp280_MultipleReadTwo(0x94);
+ 272   1              dig_P5 = bmp280_MultipleReadTwo(0x96);
+ 273   1              dig_P6 = bmp280_MultipleReadTwo(0x98);
+ 274   1              dig_P7 = bmp280_MultipleReadTwo(0x9A);
+ 275   1              dig_P8 = bmp280_MultipleReadTwo(0x9C);
+ 276   1              dig_P9 = bmp280_MultipleReadTwo(0x9E);
+ 277   1              
+ 278   1              delay_ms(200);        
+ 279   1      }
+ 280          
+ 281          long bmp280_GetValue(void)
+ 282          {
+ 283   1              long adc_T;
+ 284   1              long adc_P;
+ 285   1              long var1, var2, t_fine, T, p;
+ 286   1      
+ 287   1              adc_T = bmp280_MultipleReadThree(BMP280_TEMP_ADDR);
+ 288   1              adc_P = bmp280_MultipleReadThree(BMP280_PRESS_ADDR);
+ 289   1      
+ 290   1      //      dig_T1 = 27504;
+ 291   1      //      dig_T2 = 26435;
+ 292   1      //      dig_T3 = -1000;
+ 293   1      //      dig_P1 = 36477;
+ 294   1      //      dig_P2 = -10685;
+ 295   1      //      dig_P3 = 3024;
+ 296   1      //      dig_P4 = 2855;
+ 297   1      //      dig_P5 = 140;
+ 298   1      //      dig_P6 = -7;
+ 299   1      //      dig_P7 = 15500;
+ 300   1      //      dig_P8 = -14600;
+ 301   1      //      dig_P9 = 6000;
+ 302   1      //      adc_T = 519888;
+C51 COMPILER V9.54   TEST                                                                  03/20/2018 17:55:10 PAGE 6   
+
+ 303   1      //      adc_P = 415148;
+ 304   1      
+ 305   1              if(adc_P == 0)
+ 306   1              {
+ 307   2                      return 0;
+ 308   2              }
+ 309   1              
+ 310   1              //Temperature
+ 311   1              var1 = (((double)adc_T)/16384.0-((double)dig_T1)/1024.0)*((double)dig_T2);
+ 312   1              var2 = ((((double)adc_T)/131072.0-((double)dig_T1)/8192.0)*(((double)adc_T)/131072.0-((double)dig_T1)/819
+             -2.0))*((double)dig_T3);
+ 313   1              
+ 314   1              t_fine = (unsigned long)(var1+var2);
+ 315   1              
+ 316   1              T = (var1+var2)/5120.0;
+ 317   1              
+ 318   1              var1 = ((double)t_fine/2.0)-64000.0;
+ 319   1              var2 = var1*var1*((double)dig_P6)/32768.0;
+ 320   1              var2 = var2 +var1*((double)dig_P5)*2.0;
+ 321   1              var2 = (var2/4.0)+(((double)dig_P4)*65536.0);
+ 322   1              var1 = (((double)dig_P3)*var1*var1/524288.0+((double)dig_P2)*var1)/524288.0;
+ 323   1              var1 = (1.0+var1/32768.0)*((double)dig_P1);
+ 324   1              p = 1048576.0-(double)adc_P;
+ 325   1              p = (p-(var2/4096.0))*6250.0/var1;
+ 326   1              var1 = ((double)dig_P9)*p*p/2147483648.0;
+ 327   1              var2 = p*((double)dig_P8)/32768.0;
+ 328   1              p = p+(var1+var2+((double)dig_P7))/16.0;
+ 329   1              
+ 330   1              return p;
+ 331   1      }
+ 332          
+ 333          void main()
+ 334          {
+ 335   1              long temp;
+ 336   1              unsigned char u8;
+ 337   1              
+ 338   1              I2C_Init();
+ 339   1              Uart1Init();
+ 340   1              bmp280_Init();
+ 341   1              ES = 1;
+ 342   1              EA = 1;
+ 343   1              
+ 344   1              while(1)
+ 345   1              {
+ 346   2                      temp = bmp280_GetValue();
+ 347   2                      
+ 348   2                      
+ 349   2                      Uart1SendStr("test : ");
+ 350   2                      u8 = (temp >> 24) & 0xff;
+ 351   2                      printHex(u8);
+ 352   2                      u8 = (temp >> 16) & 0xff;
+ 353   2                      printHex(u8);
+ 354   2                      u8 = (temp >> 8) & 0xff;
+ 355   2                      printHex(u8);
+ 356   2                      u8 = (temp) & 0xff;
+ 357   2                      printHex(u8);
+ 358   2      
+ 359   2                      Uart1SendStr("\r\n\r\n\r\n");
+ 360   2                      
+ 361   2                      delay_ms(500);
+ 362   2              }
+ 363   1      }
+C51 COMPILER V9.54   TEST                                                                  03/20/2018 17:55:10 PAGE 7   
+
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2018    ----
+   CONSTANT SIZE    =     15    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     41      39
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
